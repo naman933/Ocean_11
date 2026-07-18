@@ -211,8 +211,18 @@ export default function Login() {
             <div className="mono text-[9px] text-steel-soft">
               DEMO ACCESS
             </div>
-            <div className="mono tabular mt-1.5 text-[11px] text-steel">
-              {DEMO_CREDENTIALS.username} &middot; {DEMO_CREDENTIALS.password}
+            <div
+              className="mono tabular mt-1.5 flex flex-col gap-1 text-[12.5px] text-ink"
+              style={{ textTransform: "none" }}
+            >
+              <div>
+                <span className="text-steel">username:</span>{" "}
+                <span className="font-semibold">{DEMO_CREDENTIALS.username}</span>
+              </div>
+              <div>
+                <span className="text-steel">password:</span>{" "}
+                <span className="font-semibold">{DEMO_CREDENTIALS.password}</span>
+              </div>
             </div>
           </div>
         </div>

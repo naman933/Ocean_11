@@ -1,8 +1,8 @@
 const AUTH_KEY = "kosmic_auth";
 
 export const DEMO_CREDENTIALS = {
-  username: "Member",
-  password: "Member123",
+  username: "member",
+  password: "member123",
 };
 
 export function isAuthenticated(): boolean {

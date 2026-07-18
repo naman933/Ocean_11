@@ -20,7 +20,7 @@ npm run dev
 ```
 
 Sign in with the demo credentials shown on the login screen
-(`Member` / `Member123`).
+(`member` / `member123`).
 
 ## Environment variables
 
