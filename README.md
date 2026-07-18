@@ -1,50 +1,47 @@
-# React + TypeScript + Vite
+# KOSMIC — Ocean Freight Leak Detector
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An AI-agent demo that audits ocean-freight invoices for Aarav Textiles &
+Industries against carrier contracts (OML, ASC), surfacing overcharges
+through a two-pass detection pipeline:
 
-Currently, two official plugins are available:
+- **Pass 1 — Contract Compliance**: single-invoice checks against the
+  contracted rate card (rate misapplication, surcharge errors, duplicate
+  accessorials, demurrage/detention).
+- **Pass 2 — Spend Intelligence**: cross-invoice analysis (off-contract spot
+  bookings on contracted lanes, volume rebate shortfalls) that a line-by-line
+  audit would miss.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Local development
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+npm install
+cp .env.example .env   # then fill in VITE_GROQ_API_KEY
+npm run dev
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+Sign in with the demo credentials shown on the login screen
+(`Member` / `Member123`).
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
+## Environment variables
 
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
-```
+| Variable | Purpose |
+|---|---|
+| `VITE_GROQ_API_KEY` | Powers the AI reasoning chat on the Recovery & Action screen (Groq `llama-3.3-70b-versatile`). Without it, the chat shows a clean error state — the rest of the app works normally. |
+
+## Deploying to Vercel
+
+The repo includes a `vercel.json` with a SPA rewrite (all routes fall back to
+`index.html`), which the client-side router (`react-router-dom`) needs so
+deep links like `/detail` or `/recovery` don't 404 on refresh.
+
+1. Import the repo into Vercel — it auto-detects the Vite framework preset
+   (build command `npm run build`, output directory `dist`).
+2. Add `VITE_GROQ_API_KEY` under Project Settings → Environment Variables.
+3. Deploy.
+
+## Scripts
+
+- `npm run dev` — start the dev server
+- `npm run build` — typecheck and build for production
+- `npm run preview` — preview the production build locally
+- `npm run lint` — run ESLint
