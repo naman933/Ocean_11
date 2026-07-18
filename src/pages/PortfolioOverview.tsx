@@ -3,9 +3,14 @@ import { Link } from "react-router-dom";
 import {
   Area,
   AreaChart,
+  Bar,
+  Cell,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
+  YAxis,
 } from "recharts";
 import { CheckCircle2, Lightbulb } from "lucide-react";
 import { ScreenFrame, StepFooter } from "../components/AppShell";
@@ -16,6 +21,7 @@ import {
   INVOICE_LINES,
   LEAK_CATEGORY_LABELS,
   LEAK_TREND,
+  PASS_LABELS,
   SHIPMENT_LOG,
   fmtUsd,
   getPortfolioStats,
@@ -24,6 +30,7 @@ import {
   lanePair,
   laneLabel,
   type LeakCategory,
+  type PassType,
 } from "../lib/freight-data";
 
 // ── KPI hero card ────────────────────────────────────────────
@@ -81,6 +88,250 @@ function KpiCard({
         style={{ backgroundColor: accent }}
       />
     </div>
+  );
+}
+
+// ── Leakage waterfall ────────────────────────────────────────
+
+interface WaterfallBar {
+  name: string;
+  base: number;
+  value: number;
+  top: number;
+  pctOfTotal: number;
+  kind: "total" | "leak" | "clean";
+  pass: PassType | null;
+  category?: LeakCategory;
+}
+
+// Fixed left-to-right order for the cascade — matches the standard
+// consulting waterfall reading order (Pass 1 categories, then Pass 2).
+const WATERFALL_CATEGORIES: { key: LeakCategory; label: string }[] = [
+  { key: "rate_misapplication", label: "Rate Errors" },
+  { key: "surcharge_error", label: "Surcharge Errors" },
+  { key: "demurrage_detention", label: "D&D Overcharges" },
+  { key: "accessorial_duplicate", label: "Duplicate Charges" },
+  { key: "off_contract_spot", label: "Spot Exposure" },
+  { key: "volume_rebate_shortfall", label: "Rebate Shortfall" },
+];
+
+const WATERFALL_CHART_MIN_WIDTH = 720;
+const WATERFALL_YAXIS_WIDTH = 64;
+const WATERFALL_MARGIN = { top: 24, right: 16, left: 8, bottom: 8 };
+
+function buildWaterfallData(
+  stats: ReturnType<typeof getPortfolioStats>
+): WaterfallBar[] {
+  // Each category's pass is read off the data itself (the first invoice
+  // line carrying that leak_category) rather than hardcoded, so the
+  // Pass 1 / Pass 2 grouping stays correct if the underlying data changes.
+  const passForCategory = (key: LeakCategory): PassType | null =>
+    INVOICE_LINES.find((l) => l.leak_category === key)?.pass_type ?? null;
+
+  const bars: WaterfallBar[] = [
+    {
+      name: "Total Spend",
+      base: 0,
+      value: stats.totalBilled,
+      top: stats.totalBilled,
+      pctOfTotal: 100,
+      kind: "total",
+      pass: null,
+    },
+  ];
+
+  let running = stats.totalBilled;
+  for (const cat of WATERFALL_CATEGORIES) {
+    const amount = stats.byCategory[cat.key] ?? 0;
+    const top = running;
+    running -= amount;
+    bars.push({
+      name: cat.label,
+      base: running,
+      value: amount,
+      top,
+      pctOfTotal: (amount / stats.totalBilled) * 100,
+      kind: "leak",
+      pass: passForCategory(cat.key),
+      category: cat.key,
+    });
+  }
+
+  const cleanSpend = stats.totalBilled - stats.totalLeak;
+  bars.push({
+    name: "Clean Spend",
+    base: 0,
+    value: cleanSpend,
+    top: cleanSpend,
+    pctOfTotal: (cleanSpend / stats.totalBilled) * 100,
+    kind: "clean",
+    pass: null,
+  });
+
+  return bars;
+}
+
+function WaterfallTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: { payload: WaterfallBar }[];
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const bar = payload[0].payload;
+
+  return (
+    <div
+      className="border border-line bg-white px-3 py-2.5"
+      style={{ borderRadius: "var(--radius-sm)", minWidth: 190 }}
+    >
+      <div className="text-[12.5px] font-semibold text-ink">{bar.name}</div>
+      <div className="mono tabular mt-1.5 text-[12px] text-ink">
+        {fmtUsd(bar.value, false)}
+      </div>
+      <div className="mono mt-0.5 text-[9.5px] text-steel-soft">
+        {bar.pctOfTotal.toFixed(1)}% of total spend
+      </div>
+      {bar.pass && (
+        <div
+          className="mono mt-1.5 text-[9px]"
+          style={{ color: bar.pass === "pass2" ? "var(--ink2)" : "var(--steel)" }}
+        >
+          {bar.pass === "pass1" ? "PASS 1" : "PASS 2"} &middot;{" "}
+          {PASS_LABELS[bar.pass]}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LeakageWaterfall({
+  stats,
+}: {
+  stats: ReturnType<typeof getPortfolioStats>;
+}) {
+  const data = useMemo(() => buildWaterfallData(stats), [stats]);
+
+  return (
+    <Panel kicker="SPEND LEAKAGE WATERFALL">
+      <p className="text-[14px] text-steel">
+        From total spend to recoverable value &mdash; where the money leaks
+      </p>
+
+      <div className="mt-5 overflow-x-auto">
+        <div style={{ minWidth: WATERFALL_CHART_MIN_WIDTH }}>
+          <div style={{ height: 320 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={data} margin={WATERFALL_MARGIN}>
+                <defs>
+                  <pattern
+                    id="spotStripe"
+                    width="6"
+                    height="6"
+                    patternTransform="rotate(45)"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <rect width="6" height="6" fill="var(--leak)" />
+                    <line
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="6"
+                      stroke="rgba(255,255,255,0.4)"
+                      strokeWidth="2"
+                    />
+                  </pattern>
+                </defs>
+                <XAxis
+                  dataKey="name"
+                  axisLine={{ stroke: "var(--line)" }}
+                  tickLine={false}
+                  interval={0}
+                  tick={{ fontSize: 12, fontFamily: "Inter", fill: "#4A5B72" }}
+                />
+                <YAxis
+                  width={WATERFALL_YAXIS_WIDTH}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 11, fontFamily: "Inter", fill: "#4A5B72" }}
+                  tickFormatter={(v: number) => `$${Math.round(v).toLocaleString()}`}
+                />
+                <Tooltip
+                  content={<WaterfallTooltip />}
+                  cursor={{ fill: "var(--mist)" }}
+                />
+                <Bar
+                  dataKey="base"
+                  stackId="waterfall"
+                  fill="transparent"
+                  isAnimationActive={false}
+                />
+                <Bar
+                  dataKey="value"
+                  stackId="waterfall"
+                  radius={[2, 2, 0, 0]}
+                  isAnimationActive={false}
+                  minPointSize={2}
+                >
+                  {data.map((bar) => (
+                    <Cell
+                      key={bar.name}
+                      fill={
+                        bar.kind !== "leak"
+                          ? "var(--green)"
+                          : bar.category === "off_contract_spot"
+                          ? "url(#spotStripe)"
+                          : "var(--leak)"
+                      }
+                    />
+                  ))}
+                </Bar>
+                <Line
+                  dataKey="top"
+                  type="stepAfter"
+                  stroke="var(--steel-soft)"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 4"
+                  dot={false}
+                  isAnimationActive={false}
+                  legendType="none"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div
+            className="flex"
+            style={{
+              paddingLeft: WATERFALL_YAXIS_WIDTH + WATERFALL_MARGIN.left,
+              paddingRight: WATERFALL_MARGIN.right,
+            }}
+          >
+            <div style={{ width: "12.5%" }} />
+            <div style={{ width: "50%" }} className="text-center">
+              <div
+                className="border-t"
+                style={{ borderColor: "var(--steel-soft)" }}
+              />
+              <div className="mono mt-1.5 text-[10px] text-steel">
+                PASS 1 &middot; CONTRACT COMPLIANCE
+              </div>
+            </div>
+            <div style={{ width: "25%" }} className="text-center">
+              <div className="border-t" style={{ borderColor: "var(--ink2)" }} />
+              <div
+                className="mono mt-1.5 text-[10px]"
+                style={{ color: "var(--ink2)" }}
+              >
+                PASS 2 &middot; SPEND INTELLIGENCE
+              </div>
+            </div>
+            <div style={{ width: "12.5%" }} />
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -657,6 +908,8 @@ export default function PortfolioOverview() {
               accent="var(--green)"
             />
           </div>
+
+          <LeakageWaterfall stats={stats} />
 
           <ConcentrationPanel stats={stats} />
 
