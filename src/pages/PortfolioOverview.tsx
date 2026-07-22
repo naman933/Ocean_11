@@ -19,10 +19,10 @@ import Panel from "../components/Panel";
 import { STEPS } from "../lib/nav";
 import { collectLeaks } from "../lib/dispute";
 import {
+  FX,
   INVOICE_LINES,
   LEAK_CATEGORY_LABELS,
   LEAK_TREND,
-  PASS_LABELS,
   SHIPMENT_LOG,
   fmtUsd,
   getPortfolioStats,
@@ -30,8 +30,8 @@ import {
   getVolumeRebateAnalysis,
   lanePair,
   laneLabel,
+  type InvoiceLine,
   type LeakCategory,
-  type PassType,
 } from "../lib/freight-data";
 
 // ── Shared lookups (used by both the hero row and the waterfall) ─
@@ -224,322 +224,504 @@ function StatStrip({
 
 // ── Leakage waterfall ────────────────────────────────────────
 
-type WaterfallViewMode = "category" | "carrier" | "lane";
+type WaterfallLevel = "portfolio" | "carrier" | "lane";
 
-interface WaterfallDrop {
+interface WaterfallBar {
   name: string;
+  subLabel: string;
   value: number;
-  pass?: PassType | null;
-  category?: LeakCategory;
-}
-
-interface WaterfallBar extends WaterfallDrop {
   base: number;
   top: number;
-  pctOfTotal: number;
   kind: "start" | "drop" | "end";
-  rank: number;
 }
 
-// Fixed left-to-right order for the cascade — matches the standard
-// consulting waterfall reading order (Pass 1 categories, then Pass 2).
-const WATERFALL_CATEGORIES: { key: LeakCategory; label: string }[] = [
-  { key: "rate_misapplication", label: "Rate Errors" },
-  { key: "surcharge_error", label: "Surcharge Errors" },
-  { key: "demurrage_detention", label: "D&D Overcharges" },
-  { key: "accessorial_duplicate", label: "Duplicate Charges" },
-  { key: "off_contract_spot", label: "Spot Exposure" },
-  { key: "volume_rebate_shortfall", label: "Rebate Shortfall" },
-];
+const WATERFALL_CATEGORY_META: Record<
+  LeakCategory,
+  { name: string; subLabel: string }
+> = {
+  none: { name: "", subLabel: "" },
+  off_contract_spot: { name: "Off-contract spot", subLabel: "SPOT REBOOK" },
+  demurrage_detention: { name: "Demurrage / detention", subLabel: "DEM / DET" },
+  rate_misapplication: { name: "Rate misapplication", subLabel: "RATE MISMATCH" },
+  volume_rebate_shortfall: { name: "Volume rebate shortfall", subLabel: "MQC REBATE" },
+  surcharge_error: { name: "Surcharge error", subLabel: "BAF / CAF" },
+  accessorial_duplicate: { name: "Accessorial duplicate", subLabel: "DUPLICATE" },
+};
 
-const WATERFALL_YAXIS_WIDTH = 64;
-const WATERFALL_MARGIN = { top: 28, right: 16, left: 8, bottom: 8 };
+const CARRIER_SHORT_NAMES: Record<string, string> = {
+  OML: "ODYSSEY",
+  ASC: "ATLAS",
+};
 
-// Each category's pass is read off the data itself (the first invoice line
-// carrying that leak_category) rather than hardcoded, so the Pass 1 / Pass 2
-// grouping stays correct if the underlying data changes.
-function passForCategory(key: LeakCategory): PassType | null {
-  return INVOICE_LINES.find((l) => l.leak_category === key)?.pass_type ?? null;
-}
+const WATERFALL_BAR_WIDTH = 90;
+const WATERFALL_BAR_GAP = 14;
+const WATERFALL_YAXIS_WIDTH = 68;
+const WATERFALL_MARGIN = { top: 30, right: 20, left: 8, bottom: 12 };
 
-function getWaterfallDrops(
-  mode: WaterfallViewMode,
-  stats: ReturnType<typeof getPortfolioStats>
-): WaterfallDrop[] {
-  if (mode === "carrier") {
-    return Object.entries(stats.byCarrier)
-      .map(([carrier, value]) => ({ name: carrier, value }))
-      .sort((a, b) => b.value - a.value);
+// Filters INVOICE_LINES down to the active carrier(s) / lane, then computes
+// the same shape of figures getPortfolioStats() computes for the whole
+// portfolio — so every view (portfolio, carrier, lane) runs through one
+// code path instead of three separate hardcoded cases.
+function computeFilteredWaterfallStats(lines: InvoiceLine[]) {
+  const totalBilled = lines.reduce(
+    (sum, l) => sum + l.billed_amount * (FX[l.billed_currency] || 1),
+    0
+  );
+  const leakLines = lines.filter((l) => l.match_status === "mismatch");
+  const totalLeak = leakLines.reduce((sum, l) => sum + l.leak_amount_usd, 0);
+
+  const byCategory = new Map<LeakCategory, number>();
+  for (const l of leakLines) {
+    byCategory.set(
+      l.leak_category,
+      (byCategory.get(l.leak_category) ?? 0) + l.leak_amount_usd
+    );
   }
-  if (mode === "lane") {
-    return Object.entries(stats.byLane)
-      .map(([lane, value]) => ({ name: formatLaneKey(lane), value }))
-      .sort((a, b) => b.value - a.value);
-  }
-  return WATERFALL_CATEGORIES.map((cat) => ({
-    name: cat.label,
-    value: stats.byCategory[cat.key] ?? 0,
-    pass: passForCategory(cat.key),
-    category: cat.key,
-  }));
+
+  const invoiceCount = new Set(lines.map((l) => l.invoice_id)).size;
+
+  return { totalBilled, totalLeak, byCategory, invoiceCount };
 }
 
-function buildWaterfallData(
-  totalLeak: number,
-  drops: WaterfallDrop[]
+function buildWaterfallBars(
+  stats: ReturnType<typeof computeFilteredWaterfallStats>
 ): WaterfallBar[] {
+  const drops = Array.from(stats.byCategory.entries())
+    .filter(([, value]) => value > 0)
+    .sort((a, b) => b[1] - a[1]);
+
   const bars: WaterfallBar[] = [
     {
-      name: "Total Leakage",
-      value: totalLeak,
+      name: "Total invoiced",
+      subLabel: `${stats.invoiceCount} INVOICE${stats.invoiceCount === 1 ? "" : "S"}`,
+      value: stats.totalBilled,
       base: 0,
-      top: totalLeak,
-      pctOfTotal: 100,
+      top: stats.totalBilled,
       kind: "start",
-      pass: null,
-      rank: -1,
     },
   ];
 
-  let running = totalLeak;
-  drops.forEach((drop, i) => {
+  let running = stats.totalBilled;
+  for (const [category, value] of drops) {
+    const meta = WATERFALL_CATEGORY_META[category];
     const top = running;
-    running -= drop.value;
+    running -= value;
     bars.push({
-      ...drop,
+      name: meta.name,
+      subLabel: meta.subLabel,
+      value,
       base: running,
       top,
-      pctOfTotal: totalLeak > 0 ? (drop.value / totalLeak) * 100 : 0,
       kind: "drop",
-      pass: drop.pass ?? null,
-      rank: i,
     });
-  });
+  }
 
   bars.push({
-    name: "Accounted",
-    value: 0,
+    name: "Net clean + recoverable",
+    subLabel: "POST-AUDIT BASELINE",
+    value: Math.max(0, stats.totalBilled - stats.totalLeak),
     base: 0,
-    top: 0,
-    pctOfTotal: 0,
+    top: Math.max(0, stats.totalBilled - stats.totalLeak),
     kind: "end",
-    pass: null,
-    rank: -1,
   });
 
   return bars;
 }
 
-function waterfallBarFill(bar: WaterfallBar, mode: WaterfallViewMode): string {
-  if (bar.kind === "start") return "var(--leak)";
-  if (bar.kind === "end") return "var(--green)";
-  if (mode === "category" && bar.category === "off_contract_spot") {
-    return "url(#spotStripe)";
+// Greedily wraps a label onto two lines so nothing renders with an
+// ellipsis — the x-axis has real estate budgeted for exactly this.
+function wrapLabel(text: string, maxLineLen: number): [string, string?] {
+  if (text.length <= maxLineLen) return [text];
+  const words = text.split(" ");
+  let line1 = "";
+  let line2 = "";
+  for (const w of words) {
+    if (!line1 || (line1 + " " + w).trim().length <= maxLineLen) {
+      line1 = (line1 + " " + w).trim();
+    } else {
+      line2 = (line2 + " " + w).trim();
+    }
   }
-  return "var(--leak)";
+  return line2 ? [line1, line2] : [line1];
 }
 
-function waterfallBarOpacity(bar: WaterfallBar, mode: WaterfallViewMode): number {
-  if (bar.kind !== "drop" || mode === "category") return 1;
-  // Carrier/lane views have no single "aha" category to stripe, so rank
-  // is conveyed with a gentle opacity taper instead.
-  return Math.max(0.45, 1 - bar.rank * 0.2);
-}
-
-function WaterfallTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: { payload: WaterfallBar }[];
+function WaterfallAxisTick(props: {
+  x?: number;
+  y?: number;
+  payload?: { value?: string };
+  chartData: WaterfallBar[];
 }) {
-  if (!active || !payload || payload.length === 0) return null;
-  const bar = payload[0].payload;
+  const { x = 0, y = 0, payload, chartData } = props;
+  const bar = chartData.find((b) => b.name === payload?.value);
+  if (!bar) return null;
+  const nameLines = wrapLabel(bar.name, 16);
+  const subLines = wrapLabel(bar.subLabel, 11);
+  const subStartY = 14 + nameLines.length * 13 + 6;
 
   return (
-    <div
-      className="border border-line bg-white px-3 py-2.5"
-      style={{ borderRadius: "var(--radius-sm)", minWidth: 190 }}
-    >
-      <div className="text-[12.5px] font-semibold text-ink">{bar.name}</div>
-      <div className="mono tabular mt-1.5 text-[12px] text-ink">
-        {fmtUsd(bar.value)}
-      </div>
-      {bar.kind === "drop" && (
-        <div className="mono mt-0.5 text-[9.5px] text-steel-soft">
-          {bar.pctOfTotal.toFixed(1)}% of total leakage
-        </div>
-      )}
-      {bar.pass && (
-        <div
-          className="mono mt-1.5 text-[9px]"
-          style={{ color: bar.pass === "pass2" ? "var(--ink2)" : "var(--steel)" }}
+    <g transform={`translate(${x},${y})`}>
+      {nameLines.map((line, i) => (
+        <text
+          key={i}
+          x={0}
+          y={14 + i * 13}
+          textAnchor="middle"
+          style={{ fontSize: 11, fontFamily: "Inter", fill: "var(--ink)" }}
         >
-          {bar.pass === "pass1" ? "PASS 1" : "PASS 2"} &middot;{" "}
-          {PASS_LABELS[bar.pass]}
-        </div>
-      )}
+          {line}
+        </text>
+      ))}
+      {subLines.map((line, i) => (
+        <text
+          key={i}
+          x={0}
+          y={subStartY + i * 11}
+          textAnchor="middle"
+          style={{
+            fontSize: 9.5,
+            fontFamily: "IBM Plex Mono",
+            fill: "var(--steel)",
+            letterSpacing: "0.06em",
+          }}
+        >
+          {line}
+        </text>
+      ))}
+    </g>
+  );
+}
+
+function WaterfallValueLabel(props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  index?: number;
+  chartData: WaterfallBar[];
+}) {
+  const { x = 0, y = 0, width = 0, index, chartData } = props;
+  const bar = index === undefined ? undefined : chartData[index];
+  if (!bar) return null;
+
+  const color =
+    bar.kind === "start"
+      ? "var(--ink)"
+      : bar.kind === "end"
+      ? "var(--green)"
+      : "var(--leak)";
+  const text = bar.kind === "drop" ? `-${fmtUsd(bar.value)}` : fmtUsd(bar.value);
+
+  return (
+    <text
+      x={x + width / 2}
+      y={y - 8}
+      textAnchor="middle"
+      style={{ fontSize: 13, fontWeight: 600, fontFamily: "Inter", fill: color }}
+    >
+      {text}
+    </text>
+  );
+}
+
+function WaterfallLevelControl({
+  value,
+  onChange,
+}: {
+  value: WaterfallLevel;
+  onChange: (v: WaterfallLevel) => void;
+}) {
+  const options: { key: WaterfallLevel; label: string }[] = [
+    { key: "portfolio", label: "PORTFOLIO" },
+    { key: "carrier", label: "CARRIER" },
+    { key: "lane", label: "LANE" },
+  ];
+  return (
+    <div className="mono inline-flex gap-1.5 text-[11px]">
+      {options.map((opt) => {
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            onClick={() => onChange(opt.key)}
+            className="px-3 uppercase transition-colors"
+            style={{
+              height: 32,
+              borderRadius: "var(--radius-sm)",
+              backgroundColor: active ? "var(--ink)" : "var(--mist)",
+              color: active ? "#fff" : "var(--steel)",
+              border: active ? "2px solid var(--ink)" : "2px solid transparent",
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-const WATERFALL_VIEW_OPTIONS: { key: WaterfallViewMode; label: string }[] = [
-  { key: "category", label: "By Category" },
-  { key: "carrier", label: "By Carrier" },
-  { key: "lane", label: "By Lane" },
-];
-
-function LeakageWaterfall({
-  stats,
+function CarrierToggleButtons({
+  carriers,
+  active,
+  onToggle,
 }: {
-  stats: ReturnType<typeof getPortfolioStats>;
+  carriers: string[];
+  active: Set<string>;
+  onToggle: (carrier: string) => void;
 }) {
-  const [mode, setMode] = useState<WaterfallViewMode>("category");
-
-  const data = useMemo(
-    () => buildWaterfallData(stats.totalLeak, getWaterfallDrops(mode, stats)),
-    [mode, stats]
+  return (
+    <div className="mono inline-flex gap-1.5 text-[11px]">
+      {carriers.map((c) => {
+        const isActive = active.has(c);
+        return (
+          <button
+            key={c}
+            onClick={() => onToggle(c)}
+            className="px-3 uppercase transition-colors"
+            style={{
+              height: 32,
+              borderRadius: "var(--radius-sm)",
+              backgroundColor: isActive ? "var(--ink)" : "var(--mist)",
+              color: isActive ? "#fff" : "var(--steel)",
+            }}
+          >
+            {CARRIER_SHORT_NAMES[c] ?? c}
+          </button>
+        );
+      })}
+    </div>
   );
-  const minWidth = Math.max(560, data.length * 92);
+}
+
+function LaneSelect({
+  lanes,
+  value,
+  onChange,
+}: {
+  lanes: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="mono border border-line bg-white px-3 text-[11px] text-ink outline-none"
+      style={{ height: 32, borderRadius: "var(--radius-sm)" }}
+    >
+      <option value="ALL">All lanes</option>
+      {lanes.map((lane) => (
+        <option key={lane} value={lane}>
+          {formatLaneKey(lane)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function WaterfallLegend() {
+  const items: { color: string; label: string }[] = [
+    { color: "var(--ink)", label: "Total invoiced" },
+    { color: "var(--leak)", label: "Leak category (step down)" },
+    { color: "var(--green)", label: "Net clean baseline" },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-5">
+      {items.map((item) => (
+        <div key={item.label} className="flex items-center gap-2">
+          <span
+            className="inline-block h-2.5 w-2.5"
+            style={{ backgroundColor: item.color, borderRadius: 2 }}
+          />
+          <span className="text-[12px] text-steel">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LeakageWaterfall() {
+  const [level, setLevel] = useState<WaterfallLevel>("portfolio");
+  const [activeCarriers, setActiveCarriers] = useState<Set<string>>(
+    () => new Set(Array.from(new Set(INVOICE_LINES.map((l) => l.carrier))))
+  );
+  const [lane, setLane] = useState<string>("ALL");
+
+  const allCarriers = useMemo(
+    () => Array.from(new Set(INVOICE_LINES.map((l) => l.carrier))),
+    []
+  );
+  const allLanes = useMemo(
+    () =>
+      Array.from(
+        new Set(INVOICE_LINES.map((l) => `${l.lane_origin}→${l.lane_destination}`))
+      ),
+    []
+  );
+
+  function toggleCarrier(carrier: string) {
+    setActiveCarriers((prev) => {
+      const next = new Set(prev);
+      if (next.has(carrier)) {
+        if (next.size === 1) return prev; // keep at least one active
+        next.delete(carrier);
+      } else {
+        next.add(carrier);
+      }
+      return next;
+    });
+  }
+
+  const filteredLines = useMemo(() => {
+    if (level === "carrier") {
+      return INVOICE_LINES.filter((l) => activeCarriers.has(l.carrier));
+    }
+    if (level === "lane" && lane !== "ALL") {
+      const [origin, dest] = lane.split("→");
+      return INVOICE_LINES.filter(
+        (l) => l.lane_origin === origin && l.lane_destination === dest
+      );
+    }
+    return INVOICE_LINES;
+  }, [level, activeCarriers, lane]);
+
+  const stats = useMemo(
+    () => computeFilteredWaterfallStats(filteredLines),
+    [filteredLines]
+  );
+  const data = useMemo(() => buildWaterfallBars(stats), [stats]);
+  const chartWidth =
+    data.length * WATERFALL_BAR_WIDTH +
+    (data.length - 1) * WATERFALL_BAR_GAP +
+    WATERFALL_YAXIS_WIDTH +
+    WATERFALL_MARGIN.left +
+    WATERFALL_MARGIN.right;
+
+  const filterKey = `${level}:${Array.from(activeCarriers).join(",")}:${lane}`;
 
   return (
     <Panel
-      kicker="SPEND LEAKAGE WATERFALL"
+      kicker="SPEND WATERFALL · Q2 2026"
       right={
-        <SegmentedControl
-          value={mode}
-          onChange={setMode}
-          options={WATERFALL_VIEW_OPTIONS}
-        />
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <WaterfallLevelControl value={level} onChange={setLevel} />
+          {level === "carrier" && (
+            <CarrierToggleButtons
+              carriers={allCarriers}
+              active={activeCarriers}
+              onToggle={toggleCarrier}
+            />
+          )}
+          {level === "lane" && (
+            <LaneSelect lanes={allLanes} value={lane} onChange={setLane} />
+          )}
+        </div>
       }
     >
-      <p className="text-[14px] text-steel">
-        From total leakage to fully accounted &mdash; where the money leaks
+      <h3 className="display text-[22px] font-bold text-ink">
+        Total invoiced &rarr; leakage by category &rarr; net clean spend
+      </h3>
+      <p className="mt-1.5 text-[14px] text-steel">
+        Every red step is a leak category the agent surfaced; the green
+        landing bar is what the freight budget should have been.
       </p>
 
       <div className="mt-5 overflow-x-auto">
-        <div style={{ minWidth }}>
-          <div style={{ height: 320 }}>
+        <div style={{ width: chartWidth }}>
+          <div
+            style={{
+              height: 360,
+              opacity: 1,
+              transition: "opacity 300ms ease-out",
+            }}
+          >
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart key={mode} data={data} margin={WATERFALL_MARGIN}>
-                <defs>
-                  <pattern
-                    id="spotStripe"
-                    width="6"
-                    height="6"
-                    patternTransform="rotate(45)"
-                    patternUnits="userSpaceOnUse"
-                  >
-                    <rect width="6" height="6" fill="var(--leak)" />
-                    <line
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="6"
-                      stroke="rgba(255,255,255,0.4)"
-                      strokeWidth="2"
-                    />
-                  </pattern>
-                </defs>
+              <ComposedChart
+                key={filterKey}
+                data={data}
+                margin={WATERFALL_MARGIN}
+                barCategoryGap={WATERFALL_BAR_GAP}
+              >
                 <XAxis
                   dataKey="name"
                   axisLine={{ stroke: "var(--line)" }}
                   tickLine={false}
                   interval={0}
-                  tick={{ fontSize: 12, fontFamily: "Inter", fill: "#4A5B72" }}
+                  height={72}
+                  tick={(tickProps: object) => (
+                    <WaterfallAxisTick {...tickProps} chartData={data} />
+                  )}
                 />
                 <YAxis
                   width={WATERFALL_YAXIS_WIDTH}
                   axisLine={false}
                   tickLine={false}
+                  tickCount={5}
                   tick={{ fontSize: 11, fontFamily: "Inter", fill: "#4A5B72" }}
                   tickFormatter={(v: number) => `$${Math.round(v).toLocaleString()}`}
-                />
-                <Tooltip
-                  content={<WaterfallTooltip />}
-                  cursor={{ fill: "var(--mist)" }}
                 />
                 <Bar
                   dataKey="base"
                   stackId="waterfall"
                   fill="transparent"
-                  isAnimationActive={true}
+                  isAnimationActive
                   animationDuration={300}
+                  animationEasing="ease-out"
                 />
                 <Bar
                   dataKey="value"
                   stackId="waterfall"
+                  barSize={WATERFALL_BAR_WIDTH}
                   radius={[2, 2, 0, 0]}
-                  isAnimationActive={true}
+                  isAnimationActive
                   animationDuration={300}
+                  animationEasing="ease-out"
                   minPointSize={3}
                 >
                   {data.map((bar) => (
                     <Cell
                       key={bar.name}
-                      fill={waterfallBarFill(bar, mode)}
-                      fillOpacity={waterfallBarOpacity(bar, mode)}
+                      fill={
+                        bar.kind === "start"
+                          ? "var(--ink)"
+                          : bar.kind === "end"
+                          ? "var(--green)"
+                          : "var(--leak)"
+                      }
                     />
                   ))}
                   <LabelList
                     dataKey="value"
-                    position="top"
-                    formatter={(v) => fmtUsd(Number(v ?? 0))}
-                    style={{
-                      fontSize: 10.5,
-                      fontFamily: "IBM Plex Mono",
-                      fill: "var(--ink)",
-                    }}
+                    content={(labelProps: object) => (
+                      <WaterfallValueLabel {...labelProps} chartData={data} />
+                    )}
                   />
                 </Bar>
                 <Line
                   dataKey="top"
                   type="stepAfter"
                   stroke="var(--steel-soft)"
-                  strokeWidth={1.5}
+                  strokeWidth={1}
                   strokeDasharray="4 4"
                   dot={false}
-                  isAnimationActive={true}
+                  activeDot={false}
+                  isAnimationActive
                   animationDuration={300}
+                  animationEasing="ease-out"
                   legendType="none"
                 />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      </div>
 
-          {mode === "category" && (
-            <div
-              className="flex"
-              style={{
-                paddingLeft: WATERFALL_YAXIS_WIDTH + WATERFALL_MARGIN.left,
-                paddingRight: WATERFALL_MARGIN.right,
-              }}
-            >
-              <div style={{ width: "12.5%" }} />
-              <div style={{ width: "50%" }} className="text-center">
-                <div
-                  className="border-t"
-                  style={{ borderColor: "var(--steel-soft)" }}
-                />
-                <div className="mono mt-1.5 text-[10px] text-steel">
-                  PASS 1 &middot; CONTRACT COMPLIANCE
-                </div>
-              </div>
-              <div style={{ width: "25%" }} className="text-center">
-                <div
-                  className="border-t"
-                  style={{ borderColor: "var(--ink2)" }}
-                />
-                <div
-                  className="mono mt-1.5 text-[10px]"
-                  style={{ color: "var(--ink2)" }}
-                >
-                  PASS 2 &middot; SPEND INTELLIGENCE
-                </div>
-              </div>
-              <div style={{ width: "12.5%" }} />
-            </div>
-          )}
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+        <WaterfallLegend />
+        <div className="mono text-[12px] text-steel">
+          TOTAL LEAKAGE THIS VIEW &middot;{" "}
+          <span className="font-semibold" style={{ color: "var(--leak)" }}>
+            {fmtUsd(stats.totalLeak)}
+          </span>
         </div>
       </div>
     </Panel>
@@ -1236,7 +1418,7 @@ export default function PortfolioOverview() {
             <StatStrip stats={stats} />
           </div>
 
-          <LeakageWaterfall stats={stats} />
+          <LeakageWaterfall />
 
           <ConcentrationPanel stats={stats} />
 
