@@ -3,10 +3,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Bot, Check, Copy, Send } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { Bot, Check, ChevronDown, Copy, Filter, Send } from "lucide-react";
 import { ScreenFrame, StepFooter } from "../components/AppShell";
 import Panel from "../components/Panel";
 import { STEPS } from "../lib/nav";
@@ -102,6 +104,12 @@ function RecoveryRegister({
   onSelect: (i: number) => void;
 }) {
   const total = leaks.reduce((sum, l) => sum + l.line.leak_amount_usd, 0);
+  const stickyTh: CSSProperties = {
+    position: "sticky",
+    top: 0,
+    zIndex: 10,
+    backgroundColor: "var(--paper)",
+  };
 
   return (
     <Panel
@@ -109,18 +117,37 @@ function RecoveryRegister({
       title="Prioritized by dollar impact"
       bodyClassName="p-0"
     >
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto overflow-y-auto"
+        style={{ maxHeight: 180 }}
+      >
         <table className="w-full min-w-[720px] border-collapse text-[12.5px]">
           <thead>
             <tr className="mono text-left text-[9px] text-steel-soft">
-              <th className="py-2 pl-4 font-normal">#</th>
-              <th className="py-2 font-normal">INVOICE</th>
-              <th className="py-2 font-normal">CARRIER &middot; LANE</th>
-              <th className="py-2 font-normal">CATEGORY</th>
-              <th className="py-2 font-normal">PASS</th>
-              <th className="py-2 text-right font-normal">$ AT STAKE</th>
-              <th className="py-2 pl-3 font-normal">PRIORITY</th>
-              <th className="py-2 pr-4 font-normal">OWNER</th>
+              <th className="py-2 pl-4 font-normal" style={stickyTh}>
+                #
+              </th>
+              <th className="py-2 font-normal" style={stickyTh}>
+                INVOICE
+              </th>
+              <th className="py-2 font-normal" style={stickyTh}>
+                CARRIER &middot; LANE
+              </th>
+              <th className="py-2 font-normal" style={stickyTh}>
+                CATEGORY
+              </th>
+              <th className="py-2 font-normal" style={stickyTh}>
+                PASS
+              </th>
+              <th className="py-2 text-right font-normal" style={stickyTh}>
+                $ AT STAKE
+              </th>
+              <th className="py-2 pl-3 font-normal" style={stickyTh}>
+                PRIORITY
+              </th>
+              <th className="py-2 pr-4 font-normal" style={stickyTh}>
+                OWNER
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -296,6 +323,21 @@ function EvidencePack({ leak }: { leak: Leak }) {
   );
 }
 
+function EmptyEvidenceState() {
+  return (
+    <Panel kicker="EVIDENCE PACK" bodyClassName="p-0">
+      <div
+        className="flex min-h-[300px] items-center justify-center p-8 text-center"
+        style={{ backgroundColor: "var(--mist)" }}
+      >
+        <p className="max-w-[280px] text-[13px] leading-relaxed text-steel">
+          Select a leak from the register above to view the evidence pack.
+        </p>
+      </div>
+    </Panel>
+  );
+}
+
 // ── AI Audit Assistant ───────────────────────────────────────
 
 const AUDIT_CONTEXT = `You are the AI audit assistant for KOSMIC Ocean Freight Leak Detector. You have analyzed the freight program for Aarav Textiles & Industries. Here are the complete audit findings:
@@ -407,7 +449,7 @@ function ChatBubble({ role, content, note }: ChatMessage) {
           isUser ? "text-white" : "text-ink"
         }`}
         style={{
-          backgroundColor: isUser ? "var(--ink)" : "var(--mist)",
+          backgroundColor: isUser ? "var(--ink)" : "var(--paper)",
           borderRadius: "var(--radius-sm)",
         }}
       >
@@ -426,7 +468,7 @@ function TypingIndicator() {
   return (
     <div
       className="inline-flex items-center gap-1 px-3 py-2.5"
-      style={{ backgroundColor: "var(--mist)", borderRadius: "var(--radius-sm)" }}
+      style={{ backgroundColor: "var(--paper)", borderRadius: "var(--radius-sm)" }}
     >
       {[0, 1, 2].map((i) => (
         <span
@@ -536,12 +578,16 @@ function AuditAssistantPanel() {
   }
 
   return (
-    <Panel
-      kicker="ASK THE AGENT"
-      title="AI Audit Assistant"
-      bodyClassName="p-0"
-    >
-      <div ref={scrollRef} className="max-h-72 space-y-3 overflow-y-auto p-4">
+    <Panel kicker="AI AUDIT ASSISTANT" bodyClassName="p-0">
+      <div
+        ref={scrollRef}
+        className="space-y-3 overflow-y-auto p-4"
+        style={{
+          minHeight: 240,
+          maxHeight: 400,
+          backgroundColor: "var(--mist)",
+        }}
+      >
         {messages.length === 0 && !loading && (
           <p className="text-[13px] leading-relaxed text-steel">
             Ask about specific leaks, contract clauses, or request a dispute
@@ -607,12 +653,102 @@ function AuditAssistantPanel() {
   );
 }
 
+// ── Invoice scope filter ─────────────────────────────────────
+
+const ALL_SCOPE = "all";
+
+function ScopeFilter({
+  value,
+  onChange,
+  options,
+  count,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  count: number;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <Filter size={14} color="var(--steel)" className="shrink-0" />
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="appearance-none border border-line bg-white py-1.5 pl-3 pr-8 text-[13px] text-ink outline-none"
+          style={{ height: 32, borderRadius: "var(--radius-sm)" }}
+        >
+          <option value={ALL_SCOPE}>All invoices</option>
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={14}
+          color="var(--steel)"
+          className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2"
+        />
+      </div>
+      <span className="mono whitespace-nowrap text-[11px] text-steel">
+        {count} leak{count === 1 ? "" : "s"}
+      </span>
+    </div>
+  );
+}
+
 // ── Screen ───────────────────────────────────────────────────
 
 export default function RecoveryAction() {
   const leaks = useMemo(() => collectLeaks(), []);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const scope = searchParams.get("scope") || ALL_SCOPE;
+
+  // Make the default scope explicit in the URL so it persists across
+  // refresh and back-navigation the same way other screens' filters do.
+  useEffect(() => {
+    if (!searchParams.get("scope")) {
+      const next = new URLSearchParams(searchParams);
+      next.set("scope", ALL_SCOPE);
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const invoiceOptions = useMemo(() => {
+    return [...new Set(leaks.map((l) => l.invoice.invoice_id))].map((id) => {
+      const leak = leaks.find((l) => l.invoice.invoice_id === id)!;
+      return {
+        value: id,
+        label: `${id} · ${lanePair(
+          leak.invoice.lane_origin,
+          leak.invoice.lane_destination
+        )}`,
+      };
+    });
+  }, [leaks]);
+
+  const filteredLeaks = useMemo(() => {
+    if (scope === ALL_SCOPE) return leaks;
+    return leaks.filter((l) => l.invoice.invoice_id === scope);
+  }, [leaks, scope]);
+
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const selected = leaks[selectedIdx];
+
+  // Jump back to the first row of whatever set is now visible whenever the
+  // scope changes, rather than pointing at a row that may no longer exist.
+  useEffect(() => {
+    setSelectedIdx(0);
+  }, [scope]);
+
+  const selected = filteredLeaks[selectedIdx];
+
+  function handleScopeChange(v: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("scope", v);
+    setSearchParams(next, { replace: true });
+  }
 
   return (
     <>
@@ -620,18 +756,32 @@ export default function RecoveryAction() {
         step={STEPS[4]}
         title="Prioritized register, one owner per leak, dispute already drafted."
         description="Work the recovery queue by dollar impact, then send the pre-drafted dispute."
+        right={
+          <ScopeFilter
+            value={scope}
+            onChange={handleScopeChange}
+            options={invoiceOptions}
+            count={filteredLeaks.length}
+          />
+        }
       >
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-          <div className="space-y-6 xl:col-span-7">
-            <RecoveryRegister
-              leaks={leaks}
-              selectedIdx={selectedIdx}
-              onSelect={setSelectedIdx}
-            />
-            <AuditAssistantPanel />
-          </div>
-          <div className="xl:col-span-5">
-            {selected && <EvidencePack leak={selected} />}
+        <div className="space-y-4">
+          <RecoveryRegister
+            leaks={filteredLeaks}
+            selectedIdx={selectedIdx}
+            onSelect={setSelectedIdx}
+          />
+          <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-12">
+            <div className="xl:col-span-7">
+              <AuditAssistantPanel />
+            </div>
+            <div className="xl:col-span-5">
+              {selected ? (
+                <EvidencePack leak={selected} />
+              ) : (
+                <EmptyEvidenceState />
+              )}
+            </div>
           </div>
         </div>
       </ScreenFrame>
