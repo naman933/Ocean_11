@@ -253,10 +253,8 @@ const CARRIER_SHORT_NAMES: Record<string, string> = {
   ASC: "ATLAS",
 };
 
-const WATERFALL_BAR_WIDTH = 90;
-const WATERFALL_BAR_GAP = 14;
 const WATERFALL_YAXIS_WIDTH = 68;
-const WATERFALL_MARGIN = { top: 30, right: 20, left: 8, bottom: 12 };
+const WATERFALL_MARGIN = { top: 30, right: 20, bottom: 60, left: 20 };
 
 // Filters INVOICE_LINES down to the active carrier(s) / lane, then computes
 // the same shape of figures getPortfolioStats() computes for the whole
@@ -589,12 +587,6 @@ function LeakageWaterfall() {
     [filteredLines]
   );
   const data = useMemo(() => buildWaterfallBars(stats), [stats]);
-  const chartWidth =
-    data.length * WATERFALL_BAR_WIDTH +
-    (data.length - 1) * WATERFALL_BAR_GAP +
-    WATERFALL_YAXIS_WIDTH +
-    WATERFALL_MARGIN.left +
-    WATERFALL_MARGIN.right;
 
   const filterKey = `${level}:${Array.from(activeCarriers).join(",")}:${lane}`;
 
@@ -625,94 +617,85 @@ function LeakageWaterfall() {
         landing bar is what the freight budget should have been.
       </p>
 
-      <div className="mt-5 overflow-x-auto">
-        <div style={{ width: chartWidth }}>
-          <div
-            style={{
-              height: 360,
-              opacity: 1,
-              transition: "opacity 300ms ease-out",
-            }}
+      <div
+        className="mt-5"
+        style={{ width: "100%", opacity: 1, transition: "opacity 300ms ease-out" }}
+      >
+        <ResponsiveContainer width="100%" height={360}>
+          <ComposedChart
+            key={filterKey}
+            data={data}
+            margin={WATERFALL_MARGIN}
+            barCategoryGap="12%"
           >
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart
-                key={filterKey}
-                data={data}
-                margin={WATERFALL_MARGIN}
-                barCategoryGap={WATERFALL_BAR_GAP}
-              >
-                <XAxis
-                  dataKey="name"
-                  axisLine={{ stroke: "var(--line)" }}
-                  tickLine={false}
-                  interval={0}
-                  height={72}
-                  tick={(tickProps: object) => (
-                    <WaterfallAxisTick {...tickProps} chartData={data} />
-                  )}
+            <XAxis
+              dataKey="name"
+              axisLine={{ stroke: "var(--line)" }}
+              tickLine={false}
+              interval={0}
+              tick={(tickProps: object) => (
+                <WaterfallAxisTick {...tickProps} chartData={data} />
+              )}
+            />
+            <YAxis
+              width={WATERFALL_YAXIS_WIDTH}
+              axisLine={false}
+              tickLine={false}
+              tickCount={5}
+              tick={{ fontSize: 11, fontFamily: "Inter", fill: "#4A5B72" }}
+              tickFormatter={(v: number) => `$${Math.round(v).toLocaleString()}`}
+            />
+            <Bar
+              dataKey="base"
+              stackId="waterfall"
+              fill="transparent"
+              isAnimationActive
+              animationDuration={300}
+              animationEasing="ease-out"
+            />
+            <Bar
+              dataKey="value"
+              stackId="waterfall"
+              radius={[2, 2, 0, 0]}
+              isAnimationActive
+              animationDuration={300}
+              animationEasing="ease-out"
+              minPointSize={3}
+            >
+              {data.map((bar) => (
+                <Cell
+                  key={bar.name}
+                  fill={
+                    bar.kind === "start"
+                      ? "var(--ink)"
+                      : bar.kind === "end"
+                      ? "var(--green)"
+                      : "var(--leak)"
+                  }
                 />
-                <YAxis
-                  width={WATERFALL_YAXIS_WIDTH}
-                  axisLine={false}
-                  tickLine={false}
-                  tickCount={5}
-                  tick={{ fontSize: 11, fontFamily: "Inter", fill: "#4A5B72" }}
-                  tickFormatter={(v: number) => `$${Math.round(v).toLocaleString()}`}
-                />
-                <Bar
-                  dataKey="base"
-                  stackId="waterfall"
-                  fill="transparent"
-                  isAnimationActive
-                  animationDuration={300}
-                  animationEasing="ease-out"
-                />
-                <Bar
-                  dataKey="value"
-                  stackId="waterfall"
-                  barSize={WATERFALL_BAR_WIDTH}
-                  radius={[2, 2, 0, 0]}
-                  isAnimationActive
-                  animationDuration={300}
-                  animationEasing="ease-out"
-                  minPointSize={3}
-                >
-                  {data.map((bar) => (
-                    <Cell
-                      key={bar.name}
-                      fill={
-                        bar.kind === "start"
-                          ? "var(--ink)"
-                          : bar.kind === "end"
-                          ? "var(--green)"
-                          : "var(--leak)"
-                      }
-                    />
-                  ))}
-                  <LabelList
-                    dataKey="value"
-                    content={(labelProps: object) => (
-                      <WaterfallValueLabel {...labelProps} chartData={data} />
-                    )}
-                  />
-                </Bar>
-                <Line
-                  dataKey="top"
-                  type="stepAfter"
-                  stroke="var(--steel-soft)"
-                  strokeWidth={1}
-                  strokeDasharray="4 4"
-                  dot={false}
-                  activeDot={false}
-                  isAnimationActive
-                  animationDuration={300}
-                  animationEasing="ease-out"
-                  legendType="none"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+              ))}
+              <LabelList
+                dataKey="value"
+                content={(labelProps: object) => (
+                  <WaterfallValueLabel {...labelProps} chartData={data} />
+                )}
+              />
+            </Bar>
+            <Line
+              dataKey="top"
+              type="stepAfter"
+              stroke="var(--steel-soft)"
+              strokeWidth={1}
+              strokeDasharray="4 4"
+              dot={false}
+              activeDot={false}
+              isAnimationActive
+              animationDuration={300}
+              animationEasing="ease-out"
+              legendType="none"
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
