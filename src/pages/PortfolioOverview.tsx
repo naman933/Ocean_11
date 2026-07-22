@@ -6,6 +6,7 @@ import {
   Bar,
   Cell,
   ComposedChart,
+  LabelList,
   Line,
   ResponsiveContainer,
   Tooltip,
@@ -33,21 +34,86 @@ import {
   type PassType,
 } from "../lib/freight-data";
 
-// ── KPI hero card ────────────────────────────────────────────
+// ── Shared lookups (used by both the hero row and the waterfall) ─
 
-function KpiCard({
+const CARRIER_NAMES: Record<string, string> = {
+  OML: "Odyssey Maritime Lines",
+  ASC: "Atlas Sea Carriers",
+};
+
+function formatLaneKey(key: string): string {
+  const [origin, dest] = key.split("→");
+  return origin && dest ? `${laneLabel(origin)} → ${laneLabel(dest)}` : key;
+}
+
+// ── KPI hero row ─────────────────────────────────────────────
+
+const PASS1_BREAKDOWN: { key: LeakCategory; label: string }[] = [
+  { key: "rate_misapplication", label: "Rate errors" },
+  { key: "surcharge_error", label: "Surcharge errors" },
+  { key: "demurrage_detention", label: "D&D overcharges" },
+  { key: "accessorial_duplicate", label: "Duplicate charges" },
+];
+
+const PASS2_BREAKDOWN: { key: LeakCategory; label: string }[] = [
+  { key: "off_contract_spot", label: "Spot booking exposure" },
+  { key: "volume_rebate_shortfall", label: "Volume rebate shortfall" },
+];
+
+function HeroLeakageCard({
+  stats,
+}: {
+  stats: ReturnType<typeof getPortfolioStats>;
+}) {
+  return (
+    <div
+      className="border border-line bg-paper p-6"
+      style={{ borderRadius: "var(--radius-lg)" }}
+    >
+      <div className="flex flex-wrap items-end justify-between gap-6">
+        <div>
+          <div className="mono text-[10px] text-steel">
+            TOTAL LEAKAGE IDENTIFIED
+          </div>
+          <div className="flex items-center gap-3">
+            <div
+              className="display tabular mt-2 text-[44px] font-bold leading-none"
+              style={{ color: "var(--leak)" }}
+            >
+              {fmtUsd(stats.totalLeak)}
+            </div>
+            <span
+              className="mono rounded-sm px-1.5 py-0.5 text-[10px]"
+              style={{ backgroundColor: "var(--leak-soft)", color: "var(--leak)" }}
+            >
+              +18.4% vs prior period
+            </span>
+          </div>
+        </div>
+        <div className="text-[14px] leading-snug text-steel">
+          across {stats.invoiceCount} invoices &middot; {stats.lineCount} lines
+          audited &middot; {(stats.leakRate * 100).toFixed(1)}% leak rate
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PassBreakdownCard({
   kicker,
-  value,
-  sub,
+  question,
+  amount,
+  breakdown,
+  values,
   accent,
-  trend,
   tag,
 }: {
   kicker: string;
-  value: string;
-  sub: string;
+  question: string;
+  amount: number;
+  breakdown: { key: LeakCategory; label: string }[];
+  values: Record<string, number>;
   accent: string;
-  trend?: string;
   tag?: string;
 }) {
   return (
@@ -58,14 +124,6 @@ function KpiCard({
       <div className="p-5 pb-6">
         <div className="mono flex items-center justify-between text-[10px] text-steel">
           <span>{kicker}</span>
-          {trend && (
-            <span
-              className="mono rounded-sm px-1.5 py-0.5 text-[9px]"
-              style={{ backgroundColor: "var(--leak-soft)", color: "var(--leak)" }}
-            >
-              {trend}
-            </span>
-          )}
           {tag && (
             <span
               className="mono rounded-sm px-1.5 py-0.5 text-[9px]"
@@ -76,12 +134,25 @@ function KpiCard({
           )}
         </div>
         <div
-          className="display tabular mt-3 text-[44px] font-bold leading-none"
-          style={{ color: accent }}
+          className="display tabular mt-2 text-[28px] font-bold leading-none text-ink"
         >
-          {value}
+          {fmtUsd(amount)}
         </div>
-        <div className="mt-2 text-[12px] leading-snug text-steel">{sub}</div>
+        <div className="mt-1.5 text-[13px] italic text-steel">{question}</div>
+
+        <div className="mt-4 space-y-1 border-t border-line pt-3">
+          {breakdown.map((b) => (
+            <div
+              key={b.key}
+              className="mono flex items-center justify-between text-[12px] text-steel"
+            >
+              <span>{b.label}</span>
+              <span className="tabular text-ink">
+                {fmtUsd(values[b.key] ?? 0)}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
       <div
         className="absolute inset-x-0 bottom-0 h-[2px]"
@@ -91,17 +162,83 @@ function KpiCard({
   );
 }
 
+function PlusConnector() {
+  return (
+    <div className="pointer-events-none absolute inset-y-0 left-1/2 z-10 hidden -translate-x-1/2 items-center sm:flex">
+      <span
+        className="display flex h-8 w-8 items-center justify-center border border-line bg-paper text-[18px] text-steel"
+        style={{ borderRadius: "999px" }}
+      >
+        +
+      </span>
+    </div>
+  );
+}
+
+function SumConnector({ total }: { total: number }) {
+  return (
+    <div className="flex flex-col items-center gap-1 py-1">
+      <div className="h-3 w-px" style={{ backgroundColor: "var(--line)" }} />
+      <div className="mono text-[11px] text-steel-soft">
+        = {fmtUsd(total)} total leakage
+      </div>
+      <div className="h-3 w-px" style={{ backgroundColor: "var(--line)" }} />
+    </div>
+  );
+}
+
+function StatStrip({
+  stats,
+}: {
+  stats: ReturnType<typeof getPortfolioStats>;
+}) {
+  // Distinct carriers/lanes across every invoice line, not just the ones
+  // carrying leakage — this is "how big is the program," not "where does
+  // it leak" (that's what stats.byCarrier/byLane are for, elsewhere).
+  const carrierCount = new Set(INVOICE_LINES.map((l) => l.carrier)).size;
+  const laneCount = new Set(
+    INVOICE_LINES.map((l) => `${l.lane_origin}→${l.lane_destination}`)
+  ).size;
+
+  const items = [
+    `${stats.invoiceCount} invoices processed`,
+    `${stats.lineCount} charge lines audited`,
+    `${carrierCount} carriers`,
+    `${laneCount} trade lanes`,
+    "100% coverage",
+  ];
+  return (
+    <div
+      className="mono flex h-9 w-full items-center justify-center gap-4 text-[11px] text-steel"
+      style={{ backgroundColor: "var(--mist)", borderRadius: "var(--radius-sm)" }}
+    >
+      {items.map((item, i) => (
+        <span key={item} className="flex items-center gap-4">
+          {i > 0 && <span className="text-steel-soft">|</span>}
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // ── Leakage waterfall ────────────────────────────────────────
 
-interface WaterfallBar {
+type WaterfallViewMode = "category" | "carrier" | "lane";
+
+interface WaterfallDrop {
   name: string;
-  base: number;
   value: number;
+  pass?: PassType | null;
+  category?: LeakCategory;
+}
+
+interface WaterfallBar extends WaterfallDrop {
+  base: number;
   top: number;
   pctOfTotal: number;
-  kind: "total" | "leak" | "clean";
-  pass: PassType | null;
-  category?: LeakCategory;
+  kind: "start" | "drop" | "end";
+  rank: number;
 }
 
 // Fixed left-to-right order for the cascade — matches the standard
@@ -115,60 +252,98 @@ const WATERFALL_CATEGORIES: { key: LeakCategory; label: string }[] = [
   { key: "volume_rebate_shortfall", label: "Rebate Shortfall" },
 ];
 
-const WATERFALL_CHART_MIN_WIDTH = 720;
 const WATERFALL_YAXIS_WIDTH = 64;
-const WATERFALL_MARGIN = { top: 24, right: 16, left: 8, bottom: 8 };
+const WATERFALL_MARGIN = { top: 28, right: 16, left: 8, bottom: 8 };
+
+// Each category's pass is read off the data itself (the first invoice line
+// carrying that leak_category) rather than hardcoded, so the Pass 1 / Pass 2
+// grouping stays correct if the underlying data changes.
+function passForCategory(key: LeakCategory): PassType | null {
+  return INVOICE_LINES.find((l) => l.leak_category === key)?.pass_type ?? null;
+}
+
+function getWaterfallDrops(
+  mode: WaterfallViewMode,
+  stats: ReturnType<typeof getPortfolioStats>
+): WaterfallDrop[] {
+  if (mode === "carrier") {
+    return Object.entries(stats.byCarrier)
+      .map(([carrier, value]) => ({ name: carrier, value }))
+      .sort((a, b) => b.value - a.value);
+  }
+  if (mode === "lane") {
+    return Object.entries(stats.byLane)
+      .map(([lane, value]) => ({ name: formatLaneKey(lane), value }))
+      .sort((a, b) => b.value - a.value);
+  }
+  return WATERFALL_CATEGORIES.map((cat) => ({
+    name: cat.label,
+    value: stats.byCategory[cat.key] ?? 0,
+    pass: passForCategory(cat.key),
+    category: cat.key,
+  }));
+}
 
 function buildWaterfallData(
-  stats: ReturnType<typeof getPortfolioStats>
+  totalLeak: number,
+  drops: WaterfallDrop[]
 ): WaterfallBar[] {
-  // Each category's pass is read off the data itself (the first invoice
-  // line carrying that leak_category) rather than hardcoded, so the
-  // Pass 1 / Pass 2 grouping stays correct if the underlying data changes.
-  const passForCategory = (key: LeakCategory): PassType | null =>
-    INVOICE_LINES.find((l) => l.leak_category === key)?.pass_type ?? null;
-
   const bars: WaterfallBar[] = [
     {
-      name: "Total Spend",
+      name: "Total Leakage",
+      value: totalLeak,
       base: 0,
-      value: stats.totalBilled,
-      top: stats.totalBilled,
+      top: totalLeak,
       pctOfTotal: 100,
-      kind: "total",
+      kind: "start",
       pass: null,
+      rank: -1,
     },
   ];
 
-  let running = stats.totalBilled;
-  for (const cat of WATERFALL_CATEGORIES) {
-    const amount = stats.byCategory[cat.key] ?? 0;
+  let running = totalLeak;
+  drops.forEach((drop, i) => {
     const top = running;
-    running -= amount;
+    running -= drop.value;
     bars.push({
-      name: cat.label,
+      ...drop,
       base: running,
-      value: amount,
       top,
-      pctOfTotal: (amount / stats.totalBilled) * 100,
-      kind: "leak",
-      pass: passForCategory(cat.key),
-      category: cat.key,
+      pctOfTotal: totalLeak > 0 ? (drop.value / totalLeak) * 100 : 0,
+      kind: "drop",
+      pass: drop.pass ?? null,
+      rank: i,
     });
-  }
+  });
 
-  const cleanSpend = stats.totalBilled - stats.totalLeak;
   bars.push({
-    name: "Clean Spend",
+    name: "Accounted",
+    value: 0,
     base: 0,
-    value: cleanSpend,
-    top: cleanSpend,
-    pctOfTotal: (cleanSpend / stats.totalBilled) * 100,
-    kind: "clean",
+    top: 0,
+    pctOfTotal: 0,
+    kind: "end",
     pass: null,
+    rank: -1,
   });
 
   return bars;
+}
+
+function waterfallBarFill(bar: WaterfallBar, mode: WaterfallViewMode): string {
+  if (bar.kind === "start") return "var(--leak)";
+  if (bar.kind === "end") return "var(--green)";
+  if (mode === "category" && bar.category === "off_contract_spot") {
+    return "url(#spotStripe)";
+  }
+  return "var(--leak)";
+}
+
+function waterfallBarOpacity(bar: WaterfallBar, mode: WaterfallViewMode): number {
+  if (bar.kind !== "drop" || mode === "category") return 1;
+  // Carrier/lane views have no single "aha" category to stripe, so rank
+  // is conveyed with a gentle opacity taper instead.
+  return Math.max(0.45, 1 - bar.rank * 0.2);
 }
 
 function WaterfallTooltip({
@@ -188,11 +363,13 @@ function WaterfallTooltip({
     >
       <div className="text-[12.5px] font-semibold text-ink">{bar.name}</div>
       <div className="mono tabular mt-1.5 text-[12px] text-ink">
-        {fmtUsd(bar.value, false)}
+        {fmtUsd(bar.value)}
       </div>
-      <div className="mono mt-0.5 text-[9.5px] text-steel-soft">
-        {bar.pctOfTotal.toFixed(1)}% of total spend
-      </div>
+      {bar.kind === "drop" && (
+        <div className="mono mt-0.5 text-[9.5px] text-steel-soft">
+          {bar.pctOfTotal.toFixed(1)}% of total leakage
+        </div>
+      )}
       {bar.pass && (
         <div
           className="mono mt-1.5 text-[9px]"
@@ -206,24 +383,45 @@ function WaterfallTooltip({
   );
 }
 
+const WATERFALL_VIEW_OPTIONS: { key: WaterfallViewMode; label: string }[] = [
+  { key: "category", label: "By Category" },
+  { key: "carrier", label: "By Carrier" },
+  { key: "lane", label: "By Lane" },
+];
+
 function LeakageWaterfall({
   stats,
 }: {
   stats: ReturnType<typeof getPortfolioStats>;
 }) {
-  const data = useMemo(() => buildWaterfallData(stats), [stats]);
+  const [mode, setMode] = useState<WaterfallViewMode>("category");
+
+  const data = useMemo(
+    () => buildWaterfallData(stats.totalLeak, getWaterfallDrops(mode, stats)),
+    [mode, stats]
+  );
+  const minWidth = Math.max(560, data.length * 92);
 
   return (
-    <Panel kicker="SPEND LEAKAGE WATERFALL">
+    <Panel
+      kicker="SPEND LEAKAGE WATERFALL"
+      right={
+        <SegmentedControl
+          value={mode}
+          onChange={setMode}
+          options={WATERFALL_VIEW_OPTIONS}
+        />
+      }
+    >
       <p className="text-[14px] text-steel">
-        From total spend to recoverable value &mdash; where the money leaks
+        From total leakage to fully accounted &mdash; where the money leaks
       </p>
 
       <div className="mt-5 overflow-x-auto">
-        <div style={{ minWidth: WATERFALL_CHART_MIN_WIDTH }}>
+        <div style={{ minWidth }}>
           <div style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={data} margin={WATERFALL_MARGIN}>
+              <ComposedChart key={mode} data={data} margin={WATERFALL_MARGIN}>
                 <defs>
                   <pattern
                     id="spotStripe"
@@ -265,27 +463,34 @@ function LeakageWaterfall({
                   dataKey="base"
                   stackId="waterfall"
                   fill="transparent"
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={300}
                 />
                 <Bar
                   dataKey="value"
                   stackId="waterfall"
                   radius={[2, 2, 0, 0]}
-                  isAnimationActive={false}
-                  minPointSize={2}
+                  isAnimationActive={true}
+                  animationDuration={300}
+                  minPointSize={3}
                 >
                   {data.map((bar) => (
                     <Cell
                       key={bar.name}
-                      fill={
-                        bar.kind !== "leak"
-                          ? "var(--green)"
-                          : bar.category === "off_contract_spot"
-                          ? "url(#spotStripe)"
-                          : "var(--leak)"
-                      }
+                      fill={waterfallBarFill(bar, mode)}
+                      fillOpacity={waterfallBarOpacity(bar, mode)}
                     />
                   ))}
+                  <LabelList
+                    dataKey="value"
+                    position="top"
+                    formatter={(v) => fmtUsd(Number(v ?? 0))}
+                    style={{
+                      fontSize: 10.5,
+                      fontFamily: "IBM Plex Mono",
+                      fill: "var(--ink)",
+                    }}
+                  />
                 </Bar>
                 <Line
                   dataKey="top"
@@ -294,41 +499,47 @@ function LeakageWaterfall({
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
                   dot={false}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={300}
                   legendType="none"
                 />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
 
-          <div
-            className="flex"
-            style={{
-              paddingLeft: WATERFALL_YAXIS_WIDTH + WATERFALL_MARGIN.left,
-              paddingRight: WATERFALL_MARGIN.right,
-            }}
-          >
-            <div style={{ width: "12.5%" }} />
-            <div style={{ width: "50%" }} className="text-center">
-              <div
-                className="border-t"
-                style={{ borderColor: "var(--steel-soft)" }}
-              />
-              <div className="mono mt-1.5 text-[10px] text-steel">
-                PASS 1 &middot; CONTRACT COMPLIANCE
+          {mode === "category" && (
+            <div
+              className="flex"
+              style={{
+                paddingLeft: WATERFALL_YAXIS_WIDTH + WATERFALL_MARGIN.left,
+                paddingRight: WATERFALL_MARGIN.right,
+              }}
+            >
+              <div style={{ width: "12.5%" }} />
+              <div style={{ width: "50%" }} className="text-center">
+                <div
+                  className="border-t"
+                  style={{ borderColor: "var(--steel-soft)" }}
+                />
+                <div className="mono mt-1.5 text-[10px] text-steel">
+                  PASS 1 &middot; CONTRACT COMPLIANCE
+                </div>
               </div>
-            </div>
-            <div style={{ width: "25%" }} className="text-center">
-              <div className="border-t" style={{ borderColor: "var(--ink2)" }} />
-              <div
-                className="mono mt-1.5 text-[10px]"
-                style={{ color: "var(--ink2)" }}
-              >
-                PASS 2 &middot; SPEND INTELLIGENCE
+              <div style={{ width: "25%" }} className="text-center">
+                <div
+                  className="border-t"
+                  style={{ borderColor: "var(--ink2)" }}
+                />
+                <div
+                  className="mono mt-1.5 text-[10px]"
+                  style={{ color: "var(--ink2)" }}
+                >
+                  PASS 2 &middot; SPEND INTELLIGENCE
+                </div>
               </div>
+              <div style={{ width: "12.5%" }} />
             </div>
-            <div style={{ width: "12.5%" }} />
-          </div>
+          )}
         </div>
       </div>
     </Panel>
@@ -338,16 +549,6 @@ function LeakageWaterfall({
 // ── Concentration panel ──────────────────────────────────────
 
 type ConcentrationMode = "category" | "carrier" | "lane";
-
-const CARRIER_NAMES: Record<string, string> = {
-  OML: "Odyssey Maritime Lines",
-  ASC: "Atlas Sea Carriers",
-};
-
-function formatLaneKey(key: string): string {
-  const [origin, dest] = key.split("→");
-  return origin && dest ? `${laneLabel(origin)} → ${laneLabel(dest)}` : key;
-}
 
 function SegmentedControl<T extends string>({
   options,
@@ -860,6 +1061,103 @@ function VolumeRebateGapPanel({ rebateLeakIdx }: { rebateLeakIdx: number }) {
   );
 }
 
+// ── Date period filter ───────────────────────────────────────
+
+type Period = "1W" | "1M" | "3M" | "1Y" | "Custom";
+
+interface CustomRange {
+  from: string;
+  to: string;
+}
+
+const PERIOD_OPTIONS: { key: Period; label: string }[] = [
+  { key: "1W", label: "1W" },
+  { key: "1M", label: "1M" },
+  { key: "3M", label: "3M" },
+  { key: "1Y", label: "1Y" },
+  { key: "Custom", label: "Custom" },
+];
+
+function DateFilterControl({
+  period,
+  onChange,
+  customRange,
+  onCustomRangeChange,
+  onApplyCustom,
+}: {
+  period: Period;
+  onChange: (p: Period) => void;
+  customRange: CustomRange;
+  onCustomRangeChange: (r: CustomRange) => void;
+  onApplyCustom: () => void;
+}) {
+  return (
+    <div className="relative">
+      <div
+        className="mono inline-flex overflow-hidden border border-line text-[11px]"
+        style={{ borderRadius: "var(--radius-sm)" }}
+      >
+        {PERIOD_OPTIONS.map((opt, i) => (
+          <button
+            key={opt.key}
+            onClick={() => onChange(opt.key)}
+            className={`flex items-center justify-center px-3 transition-colors ${
+              period === opt.key
+                ? "bg-ink text-white"
+                : "bg-mist text-steel hover:bg-mist2"
+            } ${i > 0 ? "border-l border-line" : ""}`}
+            style={{ height: 28 }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {period === "Custom" && (
+        <div
+          className="absolute right-0 top-[34px] z-20 w-64 border border-line bg-white p-4 shadow-lg"
+          style={{ borderRadius: "var(--radius-md)" }}
+        >
+          <div className="mono text-[9px] text-steel-soft">CUSTOM RANGE</div>
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex-1">
+              <div className="mono text-[9px] text-steel-soft">FROM</div>
+              <input
+                type="date"
+                value={customRange.from}
+                onChange={(e) =>
+                  onCustomRangeChange({ ...customRange, from: e.target.value })
+                }
+                className="mt-1 w-full border border-line px-2 py-1 text-[12px] text-ink outline-none focus:border-ink"
+                style={{ borderRadius: "var(--radius-sm)" }}
+              />
+            </div>
+            <div className="flex-1">
+              <div className="mono text-[9px] text-steel-soft">TO</div>
+              <input
+                type="date"
+                value={customRange.to}
+                onChange={(e) =>
+                  onCustomRangeChange({ ...customRange, to: e.target.value })
+                }
+                className="mt-1 w-full border border-line px-2 py-1 text-[12px] text-ink outline-none focus:border-ink"
+                style={{ borderRadius: "var(--radius-sm)" }}
+              />
+            </div>
+          </div>
+          <button
+            onClick={onApplyCustom}
+            className="mono mt-3 w-full bg-ink py-2 text-[11px] text-white transition-opacity hover:opacity-90"
+            style={{ borderRadius: "var(--radius-sm)" }}
+          >
+            Apply
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Screen ───────────────────────────────────────────────────
 
 export default function PortfolioOverview() {
@@ -872,41 +1170,70 @@ export default function PortfolioOverview() {
     (l) => l.line.leak_category === "volume_rebate_shortfall"
   );
 
+  const [period, setPeriod] = useState<Period>("3M");
+  const [customRange, setCustomRange] = useState<CustomRange>({
+    from: "2026-05-01",
+    to: "2026-07-15",
+  });
+  const [fading, setFading] = useState(false);
+
+  // This is demo data — every period shows the same figures. The fade is
+  // purely theatrical, so the screen still *feels* like it refreshed.
+  function triggerFade() {
+    setFading(true);
+    window.setTimeout(() => setFading(false), 200);
+  }
+
+  function handlePeriodChange(p: Period) {
+    if (p === period) return;
+    setPeriod(p);
+    triggerFade();
+  }
+
   return (
     <>
       <ScreenFrame
         step={STEPS[0]}
         title="How big is the problem, and where does it concentrate?"
         description="Start at the top: total leakage across the portfolio, split by detection pass, and where it concentrates by category, carrier, and lane."
+        right={
+          <DateFilterControl
+            period={period}
+            onChange={handlePeriodChange}
+            customRange={customRange}
+            onCustomRangeChange={setCustomRange}
+            onApplyCustom={triggerFade}
+          />
+        }
       >
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard
-              kicker="Leakage identified"
-              value={fmtUsd(stats.totalLeak, false)}
-              sub={`${(stats.leakRate * 100).toFixed(1)}% of total spend audited`}
-              accent="var(--leak)"
-              trend="+18.4% vs May"
-            />
-            <KpiCard
-              kicker="Pass 1 · Compliance"
-              value={fmtUsd(stats.pass1Leak, false)}
-              sub="rate, surcharge, D&D, duplicate errors"
-              accent="var(--ink)"
-            />
-            <KpiCard
-              kicker="Pass 2 · Intelligence"
-              value={fmtUsd(stats.pass2Leak, false)}
-              sub="spot exposure, rebate shortfall"
-              accent="var(--ink)"
-              tag="CROSS-INVOICE"
-            />
-            <KpiCard
-              kicker="Invoice coverage"
-              value="100%"
-              sub={`${stats.lineCount} lines audited · ${stats.invoiceCount} invoices`}
-              accent="var(--green)"
-            />
+        <div
+          className="space-y-6"
+          style={{ opacity: fading ? 0 : 1, transition: "opacity 200ms ease" }}
+        >
+          <div className="space-y-4">
+            <HeroLeakageCard stats={stats} />
+            <SumConnector total={stats.totalLeak} />
+            <div className="relative grid grid-cols-1 gap-6 sm:grid-cols-2">
+              <PassBreakdownCard
+                kicker="PASS 1 · CONTRACT COMPLIANCE"
+                question="Was the bill correct?"
+                amount={stats.pass1Leak}
+                breakdown={PASS1_BREAKDOWN}
+                values={stats.byCategory}
+                accent="var(--steel)"
+              />
+              <PlusConnector />
+              <PassBreakdownCard
+                kicker="PASS 2 · SPEND INTELLIGENCE"
+                question="Was the decision correct?"
+                amount={stats.pass2Leak}
+                breakdown={PASS2_BREAKDOWN}
+                values={stats.byCategory}
+                accent="var(--ink2)"
+                tag="CROSS-INVOICE"
+              />
+            </div>
+            <StatStrip stats={stats} />
           </div>
 
           <LeakageWaterfall stats={stats} />
