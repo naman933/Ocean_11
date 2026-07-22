@@ -41,7 +41,7 @@ const STATUS_COLOR: Record<MatchStatus, string> = {
 
 const PIPELINE_STEPS: { label: string; icon: LucideIcon }[] = [
   { label: "Read docs", icon: FileText },
-  { label: "Normalize", icon: SlidersHorizontal },
+  { label: "Digital Twin Creation", icon: SlidersHorizontal },
   { label: "Match lines", icon: Link2 },
   { label: "Judge fault", icon: Gavel },
   { label: "Quantify leak", icon: Calculator },
@@ -196,7 +196,7 @@ export default function AIReasoning() {
             <div>
               <Panel
                 kicker={invoice.contract_id}
-                title="Contract Side"
+                title="Digital Twin Side"
                 bodyClassName="p-0"
               >
                 <div className="border-b border-line px-4 py-3">
